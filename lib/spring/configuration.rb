@@ -28,7 +28,7 @@ module Spring
           path = project_root_path
         end
 
-        raise MissingApplication.new(path) unless path.join("config/application.rb").exist?
+        raise MissingApplication.new(path) unless path.join("config/environment.rb").exist?
         path
       end
     end

@@ -79,22 +79,28 @@ module Spring
         start_watcher
       end
 
-      require Spring.application_root_path.join("config", "application")
+      require 'rails_2_preload'
+      Rails2Preload.preload_until(:load_application_classes)
+      Rails2Preload.prepare_rails
 
       # config/environments/test.rb will have config.cache_classes = true. However
       # we want it to be false so that we can reload files. This is a hack to
       # override the effect of config.cache_classes = true. We can then actually
       # set config.cache_classes = false after loading the environment.
-      Rails::Application.initializer :initialize_dependency_mechanism, group: :all do
-        ActiveSupport::Dependencies.mechanism = :load
+      ::Rails::Initializer.send :alias_method,
+        :original_initialize_dependency_mechanism,
+        :initialize_dependency_mechanism
+
+      ::Rails::Initializer.send :define_method, :initialize_dependency_mechanism do
+        # no-op
       end
 
-      require Spring.application_root_path.join("config", "environment")
+      Rails2Preload.initialize_rails
 
-      @original_cache_classes = Rails.application.config.cache_classes
-      Rails.application.config.cache_classes = false
+      @original_cache_classes = ::Rails.configuration.cache_classes
+      ::Rails.configuration.cache_classes = false
 
-      disconnect_database
+      Papertrail::ProcessManager.fire(:before_first_fork)
 
       @preloaded = :success
     rescue Exception => e
@@ -105,13 +111,18 @@ module Spring
       watcher.add loaded_application_features
       watcher.add Spring.gemfile, "#{Spring.gemfile}.lock"
 
-      if defined?(Rails) && Rails.application
-        watcher.add Rails.application.paths["config/initializers"]
-        watcher.add Rails.application.paths["config/database"]
-        if secrets_path = Rails.application.paths["config/secrets"]
-          watcher.add secrets_path
-        end
-      end
+      watcher.add 'config/environments'
+      watcher.add 'config/initializers'
+      watcher.add 'config/settings'
+      watcher.add 'config/zookeeper'
+
+      watcher.add 'config/assets.yml'
+      watcher.add 'config/database.yml'
+      watcher.add 'config/glyphs.yml'
+      watcher.add 'config/preinitializer.rb'
+      watcher.add 'config/redis.conf'
+      watcher.add 'config/routes.rb'
+      watcher.add 'config/vanity.yml'
     end
 
     def eager_preload
@@ -145,13 +156,14 @@ module Spring
       args, env = JSON.load(client.read(client.gets.to_i)).values_at("args", "env")
       command   = Spring.command(args.shift)
 
-      connect_database
+      Papertrail::ProcessManager.fire(:before_fork)
       setup command
 
-      if Rails.application.reloaders.any?(&:updated?)
-        ActionDispatch::Reloader.cleanup!
-        ActionDispatch::Reloader.prepare!
-      end
+      # TODO: Backport if relevant
+      # if Rails.application.reloaders.any?(&:updated?)
+      #   ActionDispatch::Reloader.cleanup!
+      #   ActionDispatch::Reloader.prepare!
+      # end
 
       pid = fork {
         IGNORE_SIGNALS.each { |sig| trap(sig, "DEFAULT") }
@@ -163,19 +175,22 @@ module Spring
         # Delete all env vars which are unchanged from before spring started
         original_env.each { |k, v| ENV.delete k if ENV[k] == v }
 
+        ::Rails::Initializer.send :alias_method,
+          :initialize_dependency_mechanism,
+          :original_initialize_dependency_mechanism
+
+        if @original_cache_classes
+          ActiveSupport::Dependencies.mechanism = :require
+          ::Rails.configuration.cache_classes   = true
+        end
+
         # Load in the current env vars, except those which *were* changed when spring started
         env.each { |k, v| ENV[k] ||= v }
 
-        # requiring is faster, so if config.cache_classes was true in
-        # the environment's config file, then we can respect that from
-        # here on as we no longer need constant reloading.
-        if @original_cache_classes
-          ActiveSupport::Dependencies.mechanism = :require
-          Rails.application.config.cache_classes = true
-        end
-
-        connect_database
         srand
+
+        Papertrail::ProcessManager.fire(:after_fork)
+        ::Rails::Initializer.new(::Rails.configuration).postload
 
         invoke_after_fork_callbacks
         shush_backtraces
@@ -183,7 +198,6 @@ module Spring
         command.call
       }
 
-      disconnect_database
       reset_streams
 
       log "forked #{pid}"
