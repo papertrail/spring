@@ -1,3 +1,3 @@
 module Spring
-  VERSION = "1.4.0"
+  VERSION = "1.6.3"
 end

@@ -16,7 +16,7 @@ boot it every time you run a test, rake task or migration.
 
 ## Compatibility
 
-* Ruby versions: MRI 1.9.3, MRI 2.0, MRI 2.1
+* Ruby versions: MRI 1.9.3, MRI 2.0, MRI 2.1, MRI 2.2
 * Rails versions: 4.0+ (in Rails 4.1 and up Spring is included by default)
 
 Spring makes extensive use of `Process.fork`, so won't be able to
@@ -48,7 +48,7 @@ code into relevant existing executables. The snippet looks like this:
 
 ``` ruby
 begin
-  load File.expand_path("../spring", __FILE__)
+  load File.expand_path('../spring', __FILE__)
 rescue LoadError
 end
 ```
@@ -73,6 +73,7 @@ Let's run a test:
 
 ```
 $ time bin/rake test test/controllers/posts_controller_test.rb
+Running via Spring preloader in process 2734
 Run options:
 
 # Running tests:
@@ -103,6 +104,7 @@ The next run is faster:
 
 ```
 $ time bin/rake test test/controllers/posts_controller_test.rb
+Running via Spring preloader in process 8352
 Run options:
 
 # Running tests:
@@ -147,6 +149,7 @@ environment gets booted up:
 
 ```
 $ bin/rake routes
+Running via Spring preloader in process 2363
     posts GET    /posts(.:format)          posts#index
           POST   /posts(.:format)          posts#create
  new_post GET    /posts/new(.:format)      posts#new
@@ -227,6 +230,8 @@ You can add these to your Gemfile for additional commands:
   running `Test::Unit` tests on Rails 3, since only Rails 4 allows you
   to use `rake test path/to/test` to run a particular test/directory.
 * [spring-commands-teaspoon](https://github.com/alejandrobabio/spring-commands-teaspoon.git)
+* [spring-commands-m](https://github.com/gabrieljoelc/spring-commands-m.git)
+* [spring-commands-rubocop](https://github.com/p0deje/spring-commands-rubocop)
 
 ## Use without adding to bundle
 
@@ -294,7 +299,7 @@ settings. Note that `~/.spring.rb` is loaded *before* bundler, but
 projects without having to be added to the project's Gemfile, require
 them in your `~/.spring.rb`.
 
-`config/spring_preboot.rb` is also loaded before bundler and before a 
+`config/spring_client.rb` is also loaded before bundler and before a
 server process is started, it can be used to add new top-level commands.
 
 ### Application root
@@ -350,6 +355,15 @@ much CPU, then you can use event-based file system listening by
 installing the
 [spring-watcher-listen](https://github.com/jonleighton/spring-watcher-listen)
 gem.
+
+### Quiet output
+
+To disable the "Running via Spring preloader" message which is shown each time
+a command runs:
+
+``` ruby
+Spring.quiet = true
+```
 
 ## Troubleshooting
 

@@ -1,3 +1,45 @@
+## 1.6.3
+
+* Fix problem with using Bundler 1.11 with a custom `BUNDLE_PATH` (#456)
+
+## 1.6.2
+
+* Fix problems with the implementation of the new "Running via Spring preloader"
+  message (see #456, #457)
+* Print "Running via Spring preloader" message to stderr, not stdout
+
+## 1.6.1
+
+* support replaced backtraces / backtraces with only line and number
+
+## 1.6.0
+
+* show when spring is used automatically to remind people why things might fail, disable with `Spring.quiet = true`
+
+## 1.5.0
+
+* Make the temporary directory path used by spring contain the UID of the process
+  so that spring can work on machines where multiple users share a single $TMPDIR.
+
+## 1.4.3
+
+* Support new binstub format and --remove option
+
+## 1.4.2
+
+* Don't supress non-spring load errors in binstub
+
+## 1.4.1
+
+* Enable terminal resize detection in rails console.
+
+## 1.4.0
+
+* Add support for client side hooks. `config/spring_client.rb` is loaded before
+  bundler and before a server process is started, it can be used to add new
+  top-level commands.
+* Do not boot up the server when using -h / --help
+
 ## 1.3.6
 
 * Ensure the spawned server is loaded from the same version of the Spring gem

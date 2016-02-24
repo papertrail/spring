@@ -13,8 +13,9 @@ module Spring
       # should cause the "unsprung" version of the command to run.
       LOADER = <<CODE
 begin
-  load File.expand_path("../spring", __FILE__)
-rescue LoadError
+  load File.expand_path('../spring', __FILE__)
+rescue LoadError => e
+  raise unless e.message.include?('spring')
 end
 CODE
 
@@ -33,18 +34,25 @@ CODE
 # It gets overwritten when you run the `spring binstub` command.
 
 unless defined?(Spring)
-  require "rubygems"
-  require "bundler"
+  require 'rubygems'
+  require 'bundler'
 
   if (match = Bundler.default_lockfile.read.match(/^GEM$.*?^    (?:  )*spring \((.*?)\)$.*?^$/m))
-    Gem.paths = { "GEM_PATH" => [Bundler.bundle_path.to_s, *Gem.path].uniq }
-    gem "spring", match[1]
-    require "spring/binstub"
+    Gem.paths = { 'GEM_PATH' => [Bundler.bundle_path.to_s, *Gem.path].uniq }
+    gem 'spring', match[1]
+    require 'spring/binstub'
   end
 end
 CODE
 
       OLD_BINSTUB = %{if !Process.respond_to?(:fork) || Gem::Specification.find_all_by_name("spring").empty?}
+
+      BINSTUB_VARIATIONS = Regexp.union [
+        %{begin\n  load File.expand_path("../spring", __FILE__)\nrescue LoadError\nend\n},
+        %{begin\n  load File.expand_path('../spring', __FILE__)\nrescue LoadError\nend\n},
+        %{begin\n  spring_bin_path = File.expand_path('../spring', __FILE__)\n  load spring_bin_path\nrescue LoadError => e\n  raise unless e.message.end_with? spring_bin_path, 'spring/binstub'\nend\n},
+        LOADER
+      ]
 
       class Item
         attr_reader :command, :existing
@@ -72,8 +80,12 @@ CODE
               fallback = nil if fallback.include?("exec")
               generate(fallback)
               status "upgraded"
-            elsif existing =~ /load .*spring/
+            elsif existing.include?(LOADER)
               status "spring already present"
+            elsif existing =~ BINSTUB_VARIATIONS
+              upgraded = existing.sub(BINSTUB_VARIATIONS, LOADER)
+              File.write(command.binstub, upgraded)
+              status "upgraded"
             else
               head, shebang, tail = existing.partition(SHEBANG)
 
@@ -108,7 +120,7 @@ CODE
 
         def remove
           if existing
-            File.write(command.binstub, existing.sub(LOADER, ""))
+            File.write(command.binstub, existing.sub(BINSTUB_VARIATIONS, ""))
             status "spring removed"
           end
         end
@@ -117,7 +129,7 @@ CODE
       attr_reader :bindir, :items
 
       def self.description
-        "Generate spring based binstubs. Use --all to generate a binstub for all known commands."
+        "Generate spring based binstubs. Use --all to generate a binstub for all known commands. Use --remove to revert."
       end
 
       def self.rails_command

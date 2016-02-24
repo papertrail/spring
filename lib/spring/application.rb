@@ -105,7 +105,7 @@ module Spring
       @preloaded = :success
     rescue Exception => e
       @preloaded = :failure
-      watcher.add e.backtrace.map { |line| line.match(/^(.*)\:\d+\:in /)[1] }
+      watcher.add e.backtrace.map { |line| line[/^(.*)\:\d+/, 1] }
       raise e unless initialized?
     ensure
       watcher.add loaded_application_features
@@ -168,6 +168,8 @@ module Spring
       pid = fork {
         IGNORE_SIGNALS.each { |sig| trap(sig, "DEFAULT") }
         trap("TERM", "DEFAULT")
+
+        STDERR.puts "Running via Spring preloader in process #{Process.pid}" unless Spring.quiet
 
         ARGV.replace(args)
         $0 = command.exec_name

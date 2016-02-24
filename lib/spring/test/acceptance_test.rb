@@ -47,6 +47,14 @@ module Spring
         assert_output artifacts, expected_output if expected_output
       end
 
+      def refute_output_includes(command, not_expected)
+        artifacts = app.run(*Array(command))
+        not_expected.each do |stream, output|
+          assert !artifacts[stream].include?(output),
+                 "expected #{stream} to not include '#{output}'.\n\n#{app.debug(artifacts)}"
+        end
+      end
+
       def assert_speedup(ratio = DEFAULT_SPEEDUP)
         if ENV['CI']
           yield
@@ -92,6 +100,17 @@ module Spring
         assert_success "bin/spring -h", stdout: 'Usage: spring COMMAND [ARGS]'
         assert_success "bin/spring --help", stdout: 'Usage: spring COMMAND [ARGS]'
         refute app.spring_env.server_running?
+      end
+
+      test "tells the user that spring is being used when used automatically via binstubs" do
+        assert_success "bin/rails runner ''", stderr: "Running via Spring preloader in process"
+        assert_success app.spring_test_command, stderr: "Running via Spring preloader in process"
+      end
+
+      test "does not tell the user that spring is being used when used automatically via binstubs but quiet is enabled" do
+        File.write("#{app.user_home}/.spring.rb", "Spring.quiet = true")
+        assert_success "bin/rails runner ''"
+        refute_output_includes "bin/rails runner ''", stderr: 'Running via Spring preloader in process'
       end
 
       test "test changes are picked up" do
@@ -208,14 +227,28 @@ module Spring
         assert_success "bin/rake -T", stdout: "rake db:migrate"
       end
 
-      test "binstub when spring is uninstalled" do
+      test "binstub remove all" do
+        assert_success "bin/spring binstub --remove --all"
+        refute File.exist?(app.path("bin/spring"))
+      end
+
+      test "binstub when spring gem is missing" do
         without_gem "spring-#{Spring::VERSION}" do
           File.write(app.gemfile, app.gemfile.read.gsub(/gem 'spring.*/, ""))
           assert_success "bin/rake -T", stdout: "rake db:migrate"
         end
       end
 
-      test "binstub upgrade" do
+      test "binstub when spring binary is missing" do
+        begin
+          File.rename(app.path("bin/spring"), app.path("bin/spring.bak"))
+          assert_success "bin/rake -T", stdout: "rake db:migrate"
+        ensure
+          File.rename(app.path("bin/spring.bak"), app.path("bin/spring"))
+        end
+      end
+
+      test "binstub upgrade with old binstub" do
         File.write(app.path("bin/rake"), <<-RUBY.strip_heredoc)
           #!/usr/bin/env ruby
 
@@ -260,6 +293,102 @@ module Spring
         assert_equal expected, app.path("bin/rails").read
       end
 
+      test "binstub upgrade with new binstub variations" do
+        expected = <<-RUBY.gsub(/^          /, "")
+          #!/usr/bin/env ruby
+          #{Spring::Client::Binstub::LOADER.strip}
+          require 'bundler/setup'
+          load Gem.bin_path('rake', 'rake')
+        RUBY
+
+        # older variation with double quotes
+        File.write(app.path("bin/rake"), <<-RUBY.strip_heredoc)
+          #!/usr/bin/env ruby
+          begin
+            load File.expand_path("../spring", __FILE__)
+          rescue LoadError
+          end
+          require 'bundler/setup'
+          load Gem.bin_path('rake', 'rake')
+        RUBY
+
+        assert_success "bin/spring binstub rake", stdout: "bin/rake: upgraded"
+        assert_equal expected, app.path("bin/rake").read
+
+        # newer variation with single quotes
+        File.write(app.path("bin/rake"), <<-RUBY.strip_heredoc)
+          #!/usr/bin/env ruby
+          begin
+            load File.expand_path('../spring', __FILE__)
+          rescue LoadError
+          end
+          require 'bundler/setup'
+          load Gem.bin_path('rake', 'rake')
+        RUBY
+
+        assert_success "bin/spring binstub rake", stdout: "bin/rake: upgraded"
+        assert_equal expected, app.path("bin/rake").read
+
+        # newer variation which checks end of exception message
+        File.write(app.path("bin/rake"), <<-RUBY.strip_heredoc)
+          #!/usr/bin/env ruby
+          begin
+            spring_bin_path = File.expand_path('../spring', __FILE__)
+            load spring_bin_path
+          rescue LoadError => e
+            raise unless e.message.end_with? spring_bin_path, 'spring/binstub'
+          end
+          require 'bundler/setup'
+          load Gem.bin_path('rake', 'rake')
+        RUBY
+
+        assert_success "bin/spring binstub rake", stdout: "bin/rake: upgraded"
+        assert_equal expected, app.path("bin/rake").read
+      end
+
+      test "binstub remove with new binstub variations" do
+        # older variation with double quotes
+        File.write(app.path("bin/rake"), <<-RUBY.strip_heredoc)
+          #!/usr/bin/env ruby
+          begin
+            load File.expand_path("../spring", __FILE__)
+          rescue LoadError
+          end
+          require 'bundler/setup'
+          load Gem.bin_path('rake', 'rake')
+        RUBY
+
+        # newer variation with single quotes
+        File.write(app.path("bin/rails"), <<-RUBY.strip_heredoc)
+          #!/usr/bin/env ruby
+          begin
+            load File.expand_path('../spring', __FILE__)
+          rescue LoadError
+          end
+          APP_PATH = File.expand_path('../../config/application',  __FILE__)
+          require_relative '../config/boot'
+          require 'rails/commands'
+        RUBY
+
+        assert_success "bin/spring binstub --remove rake", stdout: "bin/rake: spring removed"
+        assert_success "bin/spring binstub --remove rails", stdout: "bin/rails: spring removed"
+
+        expected = <<-RUBY.strip_heredoc
+          #!/usr/bin/env ruby
+          require 'bundler/setup'
+          load Gem.bin_path('rake', 'rake')
+        RUBY
+        assert_equal expected, app.path("bin/rake").read
+
+        expected = <<-RUBY.strip_heredoc
+          #!/usr/bin/env ruby
+          APP_PATH = File.expand_path('../../config/application',  __FILE__)
+          require_relative '../config/boot'
+          require 'rails/commands'
+        RUBY
+        assert_equal expected, app.path("bin/rails").read
+      end
+
       test "after fork callback" do
         File.write(app.spring_config, "Spring.after_fork { puts '!callback!' }")
         assert_success "bin/rails runner 'puts 2'", stdout: "!callback!\n2"
@@ -270,8 +399,8 @@ module Spring
         assert_success "bin/rails runner 'puts 2'", stdout: "!callback!\n2"
       end
 
-      test "can define preboot tasks" do
-        File.write("#{app.spring_config.sub('.rb', '_preboot.rb')}", <<-RUBY)
+      test "can define client tasks" do
+        File.write("#{app.spring_config.sub('.rb', '_client.rb')}", <<-RUBY)
           Spring::Client::COMMANDS["foo"] = lambda { |args| puts "bar -- \#{args.inspect}" }
         RUBY
         assert_success "bin/spring foo --baz", stdout: "bar -- [\"foo\", \"--baz\"]\n"
@@ -337,7 +466,7 @@ module Spring
             system(#{app.env.inspect}, "bundle install")
           end
           output = `\#{Rails.root.join('bin/rails')} runner 'require "devise"; puts "done";'`
-          exit output == "done\n"
+          exit output.include? "done\n"
         RUBY
 
         assert_success [%(bin/rails runner 'load Rails.root.join("script.rb")'), timeout: 60]
@@ -365,6 +494,19 @@ module Spring
       test "Kernel.raise remains private" do
         expr = "p Kernel.private_instance_methods.include?(:raise)"
         assert_success %(bin/rails runner '#{expr}'), stdout: "true"
+      end
+
+      test "custom bundle path" do
+        bundle_path = app.path(".bundle/#{Bundler.ruby_scope}")
+        bundle_path.dirname.mkpath
+
+        FileUtils.cp_r "#{app.gem_home}/", bundle_path.to_s
+
+        app.run! "bundle install --path .bundle --clean --local"
+
+        assert_speedup do
+          2.times { assert_success "bundle exec rails runner ''" }
+        end
       end
     end
   end
